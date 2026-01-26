@@ -92,6 +92,10 @@ async def channel_post_handler(message: types.Message):
         except Exception as e:
             print(f"Ошибка отправки @{mention}: {e}")
 
+@dp.edited_channel_post_handler()
+async def edited_channel_post_handler(message: types.Message):
+    await channel_post_handler(message)
+
 
 if __name__ == "__main__":
     init_db()
