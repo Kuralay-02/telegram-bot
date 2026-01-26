@@ -67,7 +67,7 @@ async def start_handler(message: types.Message):
 
 
 # ---------- channel posts ----------
-@dp.channel_post_handler()
+@dp.channel_post_handler(content_types=types.ContentTypes.ANY)
 async def channel_post_handler(message: types.Message):
     text = message.text or message.caption
     if not text:
@@ -90,13 +90,8 @@ async def channel_post_handler(message: types.Message):
                 f"Вас упомянули в Джурыми!\n{post_link}"
             )
         except Exception as e:
-            print(f"Ошибка отправки @{mention}: {e}")
+            print(e)
 
-@dp.edited_channel_post_handler()
+@dp.edited_channel_post_handler(content_types=types.ContentTypes.ANY)
 async def edited_channel_post_handler(message: types.Message):
     await channel_post_handler(message)
-
-
-if __name__ == "__main__":
-    init_db()
-    executor.start_polling(dp, skip_updates=True)
