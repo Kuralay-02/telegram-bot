@@ -49,19 +49,18 @@ async def start_handler(message: types.Message):
 # ---------- channel posts ----------
 @dp.channel_post_handler()
 async def channel_post_handler(message: types.Message):
-    if not message.text:
+    # текст может быть в caption
+    text = message.text or message.caption
+    if not text:
         return
 
-    # ищем ВСЕ @username
-    mentions = re.findall(r'@([a-zA-Z0-9_]{3,})', message.text)
+    mentions = re.findall(r'@([a-zA-Z0-9_]{3,})', text)
     if not mentions:
         return
 
     users = load_users()
 
-    if not message.chat.username:
-        return
-
+    # публичный канал
     post_link = f"https://t.me/{message.chat.username}/{message.message_id}"
 
     for mention in mentions:
@@ -76,9 +75,8 @@ async def channel_post_handler(message: types.Message):
                 user_id,
                 f"Вас упомянули в Джурыми!\n{post_link}"
             )
-        except Exception:
-            # пользователь недоступен — не мешаем остальным
-            continue
+        except Exception as e:
+            print(f"Ошибка отправки @{username}: {e}")
 
 
 if __name__ == "__main__":
