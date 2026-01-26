@@ -1,6 +1,6 @@
 import os
 import re
-import json
+import sqlite3
 from aiogram import Bot, Dispatcher, executor, types
 
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -8,20 +8,44 @@ API_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-USERS_FILE = "users.json"
+DB_PATH = "users.db"
 
 
-# ---------- helpers ----------
-def load_users():
-    if not os.path.exists(USERS_FILE):
-        return {}
-    with open(USERS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+# ---------- DB ----------
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 
-def save_users(data):
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def save_user(username: str, user_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO users (username, user_id) VALUES (?, ?)",
+        (username.lower(), user_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_user_id(username: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT user_id FROM users WHERE username = ?",
+        (username.lower(),)
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None
 
 
 # ---------- /start ----------
@@ -34,11 +58,7 @@ async def start_handler(message: types.Message):
         )
         return
 
-    users = load_users()
-    username = message.from_user.username.lower()
-
-    users[username] = message.from_user.id
-    save_users(users)
+    save_user(message.from_user.username, message.from_user.id)
 
     await message.answer(
         "Готово ✅\n"
@@ -49,7 +69,6 @@ async def start_handler(message: types.Message):
 # ---------- channel posts ----------
 @dp.channel_post_handler()
 async def channel_post_handler(message: types.Message):
-    # текст может быть в caption
     text = message.text or message.caption
     if not text:
         return
@@ -58,15 +77,10 @@ async def channel_post_handler(message: types.Message):
     if not mentions:
         return
 
-    users = load_users()
-
-    # публичный канал
     post_link = f"https://t.me/{message.chat.username}/{message.message_id}"
 
     for mention in mentions:
-        username = mention.lower()
-        user_id = users.get(username)
-
+        user_id = get_user_id(mention)
         if not user_id:
             continue
 
@@ -76,8 +90,9 @@ async def channel_post_handler(message: types.Message):
                 f"Вас упомянули в Джурыми!\n{post_link}"
             )
         except Exception as e:
-            print(f"Ошибка отправки @{username}: {e}")
+            print(f"Ошибка отправки @{mention}: {e}")
 
 
 if __name__ == "__main__":
+    init_db()
     executor.start_polling(dp, skip_updates=True)
