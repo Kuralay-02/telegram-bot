@@ -4,6 +4,8 @@ import sqlite3
 from aiogram import Bot, Dispatcher, executor, types
 
 API_TOKEN = os.getenv("BOT_TOKEN")
+if not API_TOKEN:
+    raise RuntimeError("BOT_TOKEN is not set")
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
@@ -67,7 +69,7 @@ async def start_handler(message: types.Message):
 
 
 # ---------- channel posts ----------
-@dp.channel_post_handler(content_types=types.ContentTypes.ANY)
+@dp.channel_post_handler()
 async def channel_post_handler(message: types.Message):
     text = message.text or message.caption
     if not text:
@@ -75,6 +77,9 @@ async def channel_post_handler(message: types.Message):
 
     mentions = re.findall(r'@([a-zA-Z0-9_]{3,})', text)
     if not mentions:
+        return
+
+    if not message.chat.username:
         return
 
     post_link = f"https://t.me/{message.chat.username}/{message.message_id}"
@@ -92,6 +97,13 @@ async def channel_post_handler(message: types.Message):
         except Exception as e:
             print(e)
 
-@dp.edited_channel_post_handler(content_types=types.ContentTypes.ANY)
+
+@dp.edited_channel_post_handler()
 async def edited_channel_post_handler(message: types.Message):
     await channel_post_handler(message)
+
+
+# ---------- START ----------
+if __name__ == "__main__":
+    init_db()
+    executor.start_polling(dp, skip_updates=True)
