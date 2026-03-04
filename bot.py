@@ -43,23 +43,39 @@ def init_db():
     conn.close()
 
 
+def normalize_username(u: str) -> str:
+    """Храним username без @, в lower, чистим мусор вокруг."""
+    if not u:
+        return ""
+    s = str(u).strip().lower()
+    if s.startswith("@"):
+        s = s[1:]
+    return s
+
+
 def save_user(username: str, user_id: int):
+    uname = normalize_username(username)
+    if not uname:
+        return
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute(
         "INSERT OR REPLACE INTO users (username, user_id) VALUES (?, ?)",
-        (username.lower(), user_id)
+        (uname, user_id)
     )
     conn.commit()
     conn.close()
 
 
 def get_user_id(username: str):
+    uname = normalize_username(username)
+    if not uname:
+        return None
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute(
         "SELECT user_id FROM users WHERE username = ?",
-        (username.lower(),)
+        (uname,)
     )
     row = cur.fetchone()
     conn.close()
@@ -72,7 +88,7 @@ def get_user_id(username: str):
 async def safe_send(user_id: int, text: str):
     for attempt in range(3):
         try:
-            await bot.send_message(user_id, text)
+            await bot.send_message(user_id, text, disable_web_page_preview=True)
             return
         except asyncio.TimeoutError:
             await asyncio.sleep(2)
@@ -102,16 +118,59 @@ async def start_handler(message: types.Message):
 
 
 # =========================
-# CHANNEL POSTS
+# MENTION EXTRACTOR
 # =========================
-@dp.channel_post_handler()
+MENTION_RE = re.compile(r'@([a-zA-Z0-9_]{5,32})')
+
+def extract_mentions_from_message(message: types.Message) -> set[str]:
+    """
+    Возвращает set “targets” для уведомлений:
+    - username без @ (например: 'user_name')
+    - или 'ID:123456' для text_mention (кликабельное упоминание без @)
+    """
+    found = set()
+
+    def handle_entities(text: str, entities):
+        if not text or not entities:
+            return
+        for ent in entities:
+            # обычное @username
+            if ent.type == "mention":
+                raw = text[ent.offset: ent.offset + ent.length]  # "@user_name"
+                uname = normalize_username(raw)
+                if uname:
+                    found.add(uname)
+            # кликабельное упоминание без @ (TEXT_MENTION)
+            elif ent.type == "text_mention":
+                if ent.user and ent.user.id:
+                    found.add(f"ID:{ent.user.id}")
+
+    text = message.text or ""
+    caption = message.caption or ""
+
+    handle_entities(text, message.entities)
+    handle_entities(caption, message.caption_entities)
+
+    # fallback: обычный regex (если entities отсутствуют)
+    for m in MENTION_RE.findall(text):
+        found.add(normalize_username(m))
+    for m in MENTION_RE.findall(caption):
+        found.add(normalize_username(m))
+
+    return found
+
+
+# =========================
+# CHANNEL POSTS (важно: ANY, чтобы работало на фото с caption)
+# =========================
+@dp.channel_post_handler(content_types=types.ContentTypes.ANY)
 async def channel_post_handler(message: types.Message):
     text = message.text or message.caption
     if not text:
         return
 
-    mentions = re.findall(r'@([a-zA-Z0-9_]{3,})', text)
-    if not mentions:
+    targets = extract_mentions_from_message(message)
+    if not targets:
         return
 
     if not message.chat.username:
@@ -119,18 +178,26 @@ async def channel_post_handler(message: types.Message):
 
     post_link = f"https://t.me/{message.chat.username}/{message.message_id}"
 
-    for mention in mentions:
-        user_id = get_user_id(mention)
+    for t in targets:
+        # TEXT_MENTION — отправляем сразу по user_id
+        if t.startswith("ID:"):
+            try:
+                user_id = int(t.split(":", 1)[1])
+            except Exception:
+                continue
+
+            await safe_send(user_id, f"Вас упомянули!\n{post_link}")
+            continue
+
+        # обычный @username — ищем в базе
+        user_id = get_user_id(t)
         if not user_id:
             continue
 
-        await safe_send(
-            user_id,
-            f"Вас упомянули!\n{post_link}"
-        )
+        await safe_send(user_id, f"Вас упомянули!\n{post_link}")
 
 
-@dp.edited_channel_post_handler()
+@dp.edited_channel_post_handler(content_types=types.ContentTypes.ANY)
 async def edited_channel_post_handler(message: types.Message):
     await channel_post_handler(message)
 
