@@ -199,7 +199,7 @@ async def channel_post_handler(message: types.Message):
 
 @dp.edited_channel_post_handler(content_types=types.ContentTypes.ANY)
 async def edited_channel_post_handler(message: types.Message):
-    await channel_post_handler(message)
+    return
 
 
 # =========================
