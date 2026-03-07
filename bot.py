@@ -161,7 +161,7 @@ def extract_mentions_from_message(message: types.Message) -> set[str]:
 
 
 # =========================
-# CHANNEL POSTS (важно: ANY, чтобы работало на фото с caption)
+# CHANNEL POSTS
 # =========================
 @dp.channel_post_handler(content_types=types.ContentTypes.ANY)
 async def channel_post_handler(message: types.Message):
@@ -186,7 +186,7 @@ async def channel_post_handler(message: types.Message):
             except Exception:
                 continue
 
-            await safe_send(user_id, f"Вас упомянули!\n{post_link}")
+            await safe_send(user_id, f"Вас упомянули в Джурыми!\n{post_link}")
             continue
 
         # обычный @username — ищем в базе
@@ -194,7 +194,7 @@ async def channel_post_handler(message: types.Message):
         if not user_id:
             continue
 
-        await safe_send(user_id, f"Вас упомянули!\n{post_link}")
+        await safe_send(user_id, f"Вас упомянули в Джурыми!\n{post_link}")
 
 
 @dp.edited_channel_post_handler(content_types=types.ContentTypes.ANY)
