@@ -120,6 +120,10 @@ def extract_mentions_from_message(message: types.Message) -> set[str]:
     text = message.text or ""
     caption = message.caption or ""
 
+    # удаляем ссылки t.me
+    text = re.sub(r'https?://t\.me/\S+', '', text)
+    caption = re.sub(r'https?://t\.me/\S+', '', caption)
+
     handle_entities(text, message.entities)
     handle_entities(caption, message.caption_entities)
 
