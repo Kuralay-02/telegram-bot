@@ -77,27 +77,6 @@ def get_user_id(username: str):
 
 
 # =========================
-# SAFE SEND (ЛОГИРОВАНИЕ)
-# =========================
-async def safe_send(user_id: int, text: str, username: str = ""):
-    try:
-        await bot.send_message(user_id, text, disable_web_page_preview=True)
-        print(f"✅ Отправлено: {username} ({user_id})")
-
-    except Exception as e:
-        error_text = f"❌ НЕ отправлено: {username} ({user_id})\nОшибка: {e}"
-        print(error_text)
-
-        # 👉 уведомление админу
-        try:
-            await bot.send_message(
-                int(os.getenv("ADMIN_ID")),
-                error_text
-            )
-        except:
-            pass
-
-# =========================
 # /start
 # =========================
 @dp.message_handler(commands=["start"])
@@ -153,6 +132,61 @@ def extract_mentions_from_message(message: types.Message) -> set[str]:
 
 
 # =========================
+# ОТПРАВКА + ОТЧЁТ (1 сообщение)
+# =========================
+async def send_batch_notifications(targets, post_link):
+    admin_id = int(os.getenv("ADMIN_ID", "0"))
+
+    success = 0
+    failed = []
+
+    for t in targets:
+        # ID-упоминания
+        if t.startswith("ID:"):
+            try:
+                user_id = int(t.split(":", 1)[1])
+                username = f"id:{user_id}"
+            except:
+                continue
+        else:
+            user_id = get_user_id(t)
+            username = t
+
+            if not user_id:
+                failed.append(f"{username} — нет в базе")
+                continue
+
+        try:
+            await bot.send_message(
+                user_id,
+                f"Вас упомянули в Джурыми!\n{post_link}",
+                disable_web_page_preview=True
+            )
+            success += 1
+
+        except Exception as e:
+            failed.append(f"{username} — {str(e)}")
+
+        await asyncio.sleep(0.05)
+
+    # отчёт админу
+    report = f"📊 Отчёт по посту\n\n"
+    report += f"✅ Успешно: {success}\n"
+    report += f"❌ Ошибки: {len(failed)}\n\n"
+
+    if failed:
+        report += "Не получили:\n"
+        report += "\n".join(failed[:30])
+
+    report += f"\n\n🔗 {post_link}"
+
+    try:
+        await bot.send_message(admin_id, report)
+    except:
+        print("Ошибка отправки отчёта админу")
+
+
+# =========================
 # CHANNEL POSTS
 # =========================
 @dp.channel_post_handler(content_types=types.ContentTypes.ANY)
@@ -170,30 +204,7 @@ async def channel_post_handler(message: types.Message):
 
     post_link = f"https://t.me/{message.chat.username}/{message.message_id}"
 
-    for t in targets:
-        if t.startswith("ID:"):
-            try:
-                user_id = int(t.split(":", 1)[1])
-            except Exception:
-                continue
-
-            await safe_send(
-                user_id,
-                f"Вас упомянули в Джурыми!\n{post_link}",
-                t
-            )
-            continue
-
-        user_id = get_user_id(t)
-        if not user_id:
-            print(f"⚠️ Нет в базе: {t}")
-            continue
-
-        await safe_send(
-            user_id,
-            f"Вас упомянули в Джурыми!\n{post_link}",
-            t
-        )
+    await send_batch_notifications(targets, post_link)
 
 
 @dp.edited_channel_post_handler(content_types=types.ContentTypes.ANY)
