@@ -196,6 +196,20 @@ async def channel_post_handler(message: types.Message):
         return
 
     targets = extract_mentions_from_message(message)
+    # фильтр лишних упоминаний
+    EXCLUDE = {
+        "jureumishopmentionbot",
+        "jureumiqa_bot",
+        "jureumitrackerbot",
+        "jureumisheetsbot",
+        "teplocsjureumi_bot",
+        "teplodvjureumi_bot",
+        "jureumidv_bot",
+        "consolidationjureumi_bot"
+    }
+
+    targets = {t for t in targets if t not in EXCLUDE}
+    
     if not targets:
         return
 
