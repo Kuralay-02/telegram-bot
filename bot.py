@@ -126,14 +126,16 @@ def extract_mentions_from_message(message: types.Message) -> set[str]:
 
     handle_entities(text, message.entities)
     handle_entities(caption, message.caption_entities)
-
+        
     for m in MENTION_RE.findall(text):
-        found.add(normalize_username(m))
+        if f"@{m}" in text:
+            found.add(normalize_username(m))
+
     for m in MENTION_RE.findall(caption):
-        found.add(normalize_username(m))
+        if f"@{m}" in caption:
+            found.add(normalize_username(m))
 
     return found
-
 
 # =========================
 # ОТПРАВКА + ОТЧЁТ (1 сообщение)
