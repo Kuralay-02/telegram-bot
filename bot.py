@@ -237,3 +237,23 @@ if __name__ == "__main__":
         skip_updates=True,
         on_startup=on_startup
     )
+
+# =========================
+# EXPORT USERS (временно)
+# =========================
+@dp.message_handler(commands=["export"])
+async def export_users(message: types.Message):
+    if message.from_user.id != int(os.getenv("ADMIN_ID", "0")):
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT username, user_id FROM users")
+    rows = cur.fetchall()
+    conn.close()
+
+    text = "\n".join([f"{u},{i}" for u, i in rows])
+
+    # если много — разобьём
+    for i in range(0, len(text), 4000):
+        await message.answer(text[i:i+4000])
