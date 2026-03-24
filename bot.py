@@ -85,8 +85,17 @@ async def safe_send(user_id: int, text: str, username: str = ""):
         print(f"✅ Отправлено: {username} ({user_id})")
 
     except Exception as e:
-        print(f"❌ НЕ отправлено: {username} ({user_id}) | ошибка: {e}")
+        error_text = f"❌ НЕ отправлено: {username} ({user_id})\nОшибка: {e}"
+        print(error_text)
 
+        # 👉 уведомление админу
+        try:
+            await bot.send_message(
+                int(os.getenv("ADMIN_ID")),
+                error_text
+            )
+        except:
+            pass
 
 # =========================
 # /start
