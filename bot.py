@@ -203,6 +203,7 @@ async def channel_post_handler(message: types.Message):
     # фильтр лишних упоминаний
     EXCLUDE = {
         "jureumishopmentionbot",
+        "shopmentionbot",
         "jureumiqa_bot",
         "jureumitrackerbot",
         "jureumisheetsbot",
