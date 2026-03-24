@@ -15,7 +15,7 @@ DB_PATH = "users.db"
 
 
 # =========================
-# BOT (увеличенный timeout)
+# BOT
 # =========================
 timeout = ClientTimeout(total=60)
 
@@ -44,7 +44,6 @@ def init_db():
 
 
 def normalize_username(u: str) -> str:
-    """Храним username без @, в lower, чистим мусор вокруг."""
     if not u:
         return ""
     s = str(u).strip().lower()
@@ -83,7 +82,7 @@ def get_user_id(username: str):
 
 
 # =========================
-# SAFE SEND (retry)
+# SAFE SEND
 # =========================
 async def safe_send(user_id: int, text: str):
     for attempt in range(3):
@@ -118,29 +117,54 @@ async def start_handler(message: types.Message):
 
 
 # =========================
+# /id (ТЕСТ)
+# =========================
+@dp.message_handler(commands=["id"])
+async def get_id(message: types.Message):
+    await message.answer(f"Твой ID: {message.from_user.id}")
+
+
+# =========================
+# /export (БЭКАП)
+# =========================
+@dp.message_handler(commands=["export"])
+async def export_users(message: types.Message):
+    if message.from_user.id != int(os.getenv("ADMIN_ID", "0")):
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT username, user_id FROM users")
+    rows = cur.fetchall()
+    conn.close()
+
+    text = "\n".join([f"{u},{i}" for u, i in rows])
+
+    if not text:
+        await message.answer("База пустая")
+        return
+
+    for i in range(0, len(text), 4000):
+        await message.answer(text[i:i+4000])
+
+
+# =========================
 # MENTION EXTRACTOR
 # =========================
 MENTION_RE = re.compile(r'@([a-zA-Z0-9_]{5,32})')
 
 def extract_mentions_from_message(message: types.Message) -> set[str]:
-    """
-    Возвращает set “targets” для уведомлений:
-    - username без @ (например: 'user_name')
-    - или 'ID:123456' для text_mention (кликабельное упоминание без @)
-    """
     found = set()
 
     def handle_entities(text: str, entities):
         if not text or not entities:
             return
         for ent in entities:
-            # обычное @username
             if ent.type == "mention":
-                raw = text[ent.offset: ent.offset + ent.length]  # "@user_name"
+                raw = text[ent.offset: ent.offset + ent.length]
                 uname = normalize_username(raw)
                 if uname:
                     found.add(uname)
-            # кликабельное упоминание без @ (TEXT_MENTION)
             elif ent.type == "text_mention":
                 if ent.user and ent.user.id:
                     found.add(f"ID:{ent.user.id}")
@@ -151,7 +175,6 @@ def extract_mentions_from_message(message: types.Message) -> set[str]:
     handle_entities(text, message.entities)
     handle_entities(caption, message.caption_entities)
 
-    # fallback: обычный regex (если entities отсутствуют)
     for m in MENTION_RE.findall(text):
         found.add(normalize_username(m))
     for m in MENTION_RE.findall(caption):
@@ -179,7 +202,6 @@ async def channel_post_handler(message: types.Message):
     post_link = f"https://t.me/{message.chat.username}/{message.message_id}"
 
     for t in targets:
-        # TEXT_MENTION — отправляем сразу по user_id
         if t.startswith("ID:"):
             try:
                 user_id = int(t.split(":", 1)[1])
@@ -189,7 +211,6 @@ async def channel_post_handler(message: types.Message):
             await safe_send(user_id, f"Вас упомянули в Джурыми!\n{post_link}")
             continue
 
-        # обычный @username — ищем в базе
         user_id = get_user_id(t)
         if not user_id:
             continue
@@ -203,7 +224,7 @@ async def edited_channel_post_handler(message: types.Message):
 
 
 # =========================
-# HEALTH ENDPOINT (anti-sleep)
+# HEALTH
 # =========================
 async def health(request):
     return web.Response(text="OK")
@@ -237,23 +258,3 @@ if __name__ == "__main__":
         skip_updates=True,
         on_startup=on_startup
     )
-
-# =========================
-# EXPORT USERS (временно)
-# =========================
-@dp.message_handler(commands=["export"])
-async def export_users(message: types.Message):
-    if message.from_user.id != int(os.getenv("ADMIN_ID", "0")):
-        return
-
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT username, user_id FROM users")
-    rows = cur.fetchall()
-    conn.close()
-
-    text = "\n".join([f"{u},{i}" for u, i in rows])
-
-    # если много — разобьём
-    for i in range(0, len(text), 4000):
-        await message.answer(text[i:i+4000])
