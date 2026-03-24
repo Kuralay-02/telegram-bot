@@ -1,7 +1,8 @@
 import os
 import re
-import sqlite3
 import asyncio
+import json
+import gspread
 
 from aiohttp import web, ClientTimeout
 from aiogram import Bot, Dispatcher, executor, types
@@ -10,8 +11,6 @@ from aiogram import Bot, Dispatcher, executor, types
 API_TOKEN = os.getenv("BOT_TOKEN")
 if not API_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-
-DB_PATH = "users.db"
 
 
 # =========================
@@ -28,21 +27,18 @@ dp = Dispatcher(bot)
 
 
 # =========================
-# DB
+# GOOGLE SHEETS
 # =========================
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            username TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL
-        )
-    """)
-    conn.commit()
-    conn.close()
+creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
+gc = gspread.service_account_from_dict(creds_dict)
+
+spreadsheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1fqMGsQqXP9a7RNg-_7unYsqQeufg1If3oGPIFfqa-_o/edit?usp=sharing")
+sheet = spreadsheet.worksheet("Users")
 
 
+# =========================
+# UTILS
+# =========================
 def normalize_username(u: str) -> str:
     if not u:
         return ""
@@ -56,44 +52,40 @@ def save_user(username: str, user_id: int):
     uname = normalize_username(username)
     if not uname:
         return
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT OR REPLACE INTO users (username, user_id) VALUES (?, ?)",
-        (uname, user_id)
-    )
-    conn.commit()
-    conn.close()
+
+    data = sheet.get_all_records()
+
+    for row in data:
+        if row["username"] == uname:
+            return
+
+    sheet.append_row([uname, user_id])
 
 
 def get_user_id(username: str):
     uname = normalize_username(username)
     if not uname:
         return None
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT user_id FROM users WHERE username = ?",
-        (uname,)
-    )
-    row = cur.fetchone()
-    conn.close()
-    return row[0] if row else None
+
+    data = sheet.get_all_records()
+
+    for row in data:
+        if row["username"] == uname:
+            return int(row["user_id"])
+
+    return None
 
 
 # =========================
-# SAFE SEND
+# SAFE SEND (ЛОГИРОВАНИЕ)
 # =========================
-async def safe_send(user_id: int, text: str):
-    for attempt in range(3):
-        try:
-            await bot.send_message(user_id, text, disable_web_page_preview=True)
-            return
-        except asyncio.TimeoutError:
-            await asyncio.sleep(2)
-        except Exception as e:
-            print("Send error:", e)
-            return
+async def safe_send(user_id: int, text: str, username: str = ""):
+    try:
+        await bot.send_message(user_id, text, disable_web_page_preview=True)
+        print(f"✅ Отправлено: {username} ({user_id})")
+
+    except Exception as e:
+        print(f"❌ НЕ отправлено: {username} ({user_id}) | ошибка: {e}")
 
 
 # =========================
@@ -114,38 +106,6 @@ async def start_handler(message: types.Message):
         "Готово ✅\n"
         "Теперь буду присылать уведомления об упоминаниях."
     )
-
-
-# =========================
-# /id (ТЕСТ)
-# =========================
-@dp.message_handler(commands=["id"])
-async def get_id(message: types.Message):
-    await message.answer(f"Твой ID: {message.from_user.id}")
-
-
-# =========================
-# /export (БЭКАП)
-# =========================
-@dp.message_handler(commands=["export"])
-async def export_users(message: types.Message):
-    if message.from_user.id != int(os.getenv("ADMIN_ID", "0")):
-        return
-
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT username, user_id FROM users")
-    rows = cur.fetchall()
-    conn.close()
-
-    text = "\n".join([f"{u},{i}" for u, i in rows])
-
-    if not text:
-        await message.answer("База пустая")
-        return
-
-    for i in range(0, len(text), 4000):
-        await message.answer(text[i:i+4000])
 
 
 # =========================
@@ -208,14 +168,23 @@ async def channel_post_handler(message: types.Message):
             except Exception:
                 continue
 
-            await safe_send(user_id, f"Вас упомянули в Джурыми!\n{post_link}")
+            await safe_send(
+                user_id,
+                f"Вас упомянули в Джурыми!\n{post_link}",
+                t
+            )
             continue
 
         user_id = get_user_id(t)
         if not user_id:
+            print(f"⚠️ Нет в базе: {t}")
             continue
 
-        await safe_send(user_id, f"Вас упомянули в Джурыми!\n{post_link}")
+        await safe_send(
+            user_id,
+            f"Вас упомянули в Джурыми!\n{post_link}",
+            t
+        )
 
 
 @dp.edited_channel_post_handler(content_types=types.ContentTypes.ANY)
@@ -252,7 +221,6 @@ async def on_startup(dp):
 # START
 # =========================
 if __name__ == "__main__":
-    init_db()
     executor.start_polling(
         dp,
         skip_updates=True,
