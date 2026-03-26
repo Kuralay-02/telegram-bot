@@ -99,7 +99,6 @@ async def start_handler(message: types.Message):
 # =========================
 # MENTION EXTRACTOR
 # =========================
-MENTION_RE = re.compile(r'@([a-zA-Z0-9_]{5,32})')
 
 def extract_mentions_from_message(message: types.Message) -> set[str]:
     found = set()
@@ -126,14 +125,6 @@ def extract_mentions_from_message(message: types.Message) -> set[str]:
 
     handle_entities(text, message.entities)
     handle_entities(caption, message.caption_entities)
-        
-    for m in MENTION_RE.findall(text):
-        if f"@{m}" in text:
-            found.add(normalize_username(m))
-
-    for m in MENTION_RE.findall(caption):
-        if f"@{m}" in caption:
-            found.add(normalize_username(m))
 
     return found
 
@@ -143,7 +134,7 @@ def extract_mentions_from_message(message: types.Message) -> set[str]:
 async def send_batch_notifications(targets, post_link):
     admin_id = int(os.getenv("ADMIN_ID", "0"))
 
-    success = 0
+    success = []
     failed = []
 
     for t in targets:
@@ -168,20 +159,33 @@ async def send_batch_notifications(targets, post_link):
                 f"Вас упомянули в Джурыми!\n{post_link}",
                 disable_web_page_preview=True
             )
-            success += 1
+            success.append(username)
 
         except Exception as e:
-            failed.append(f"{username} — {str(e)}")
+            error_text = str(e)
+
+            if "bot was blocked" in error_text:
+                error_text = "заблокировал бота"
+            elif "chat not found" in error_text:
+                error_text = "не нажал /start"
+            elif "user is deactivated" in error_text:
+                error_text = "аккаунт удалён"
+
+            failed.append(f"{username} — {error_text}")
 
         await asyncio.sleep(0.05)
 
-    # отчёт админу
+    # 🔥 КРАСИВЫЙ ОТЧЁТ
     report = f"📊 Отчёт по посту\n\n"
-    report += f"✅ Успешно: {success}\n"
+    report += f"✅ Успешно: {len(success)}\n"
     report += f"❌ Ошибки: {len(failed)}\n\n"
 
+    if success:
+        report += "📨 Получили:\n"
+        report += "\n".join(success[:30]) + "\n\n"
+
     if failed:
-        report += "Не получили:\n"
+        report += "⚠️ Не получили:\n"
         report += "\n".join(failed[:30])
 
     report += f"\n\n🔗 {post_link}"
@@ -190,8 +194,6 @@ async def send_batch_notifications(targets, post_link):
         await bot.send_message(admin_id, report)
     except:
         print("Ошибка отправки отчёта админу")
-
-
 # =========================
 # CHANNEL POSTS
 # =========================
@@ -212,7 +214,8 @@ async def channel_post_handler(message: types.Message):
         "teplocsjureumi_bot",
         "teplodvjureumi_bot",
         "jureumidv_bot",
-        "consolidationjureumi_bot"
+        "consolidationjureumi_bot",
+        "jureumishop"
     }
 
     targets = {t for t in targets if t not in EXCLUDE}
