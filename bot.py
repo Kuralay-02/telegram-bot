@@ -1,11 +1,11 @@
 import os
-import re
 import asyncio
 import json
 import gspread
 
 from aiohttp import web, ClientTimeout
 from aiogram import Bot, Dispatcher, executor, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -34,6 +34,12 @@ gc = gspread.service_account_from_dict(creds_dict)
 
 spreadsheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1fqMGsQqXP9a7RNg-_7unYsqQeufg1If3oGPIFfqa-_o/edit?usp=sharing")
 sheet = spreadsheet.worksheet("Users")
+
+
+# =========================
+# CACHE ДЛЯ ПОВТОРА
+# =========================
+FAILED_CACHE = {}
 
 
 # =========================
@@ -99,7 +105,6 @@ async def start_handler(message: types.Message):
 # =========================
 # MENTION EXTRACTOR
 # =========================
-
 def extract_mentions_from_message(message: types.Message) -> set[str]:
     found = set()
 
@@ -119,17 +124,14 @@ def extract_mentions_from_message(message: types.Message) -> set[str]:
     text = message.text or ""
     caption = message.caption or ""
 
-    # удаляем ссылки t.me
-    text = re.sub(r'https?://t\.me/\S+', '', text)
-    caption = re.sub(r'https?://t\.me/\S+', '', caption)
-
     handle_entities(text, message.entities)
     handle_entities(caption, message.caption_entities)
 
     return found
 
+
 # =========================
-# ОТПРАВКА + ОТЧЁТ (1 сообщение)
+# ОТПРАВКА + ОТЧЁТ
 # =========================
 async def send_batch_notifications(targets, post_link):
     admin_id = int(os.getenv("ADMIN_ID", "0"))
@@ -138,7 +140,6 @@ async def send_batch_notifications(targets, post_link):
     failed = []
 
     for t in targets:
-        # ID-упоминания
         if t.startswith("ID:"):
             try:
                 user_id = int(t.split(":", 1)[1])
@@ -150,7 +151,7 @@ async def send_batch_notifications(targets, post_link):
             username = t
 
             if not user_id:
-                failed.append(f"{username} — нет в базе")
+                failed.append((username, None, "нет в базе"))
                 continue
 
         try:
@@ -171,11 +172,14 @@ async def send_batch_notifications(targets, post_link):
             elif "user is deactivated" in error_text:
                 error_text = "аккаунт удалён"
 
-            failed.append(f"{username} — {error_text}")
+            failed.append((username, user_id, error_text))
 
         await asyncio.sleep(0.05)
 
-    # 🔥 КРАСИВЫЙ ОТЧЁТ
+    # сохраняем для кнопки
+    FAILED_CACHE[post_link] = [(u, uid) for u, uid, _ in failed if uid]
+
+    # отчёт
     report = f"📊 Отчёт по посту\n\n"
     report += f"✅ Успешно: {len(success)}\n"
     report += f"❌ Ошибки: {len(failed)}\n\n"
@@ -186,14 +190,55 @@ async def send_batch_notifications(targets, post_link):
 
     if failed:
         report += "⚠️ Не получили:\n"
-        report += "\n".join(failed[:30])
+        report += "\n".join([f"{u} — {e}" for u, _, e in failed[:30])
 
     report += f"\n\n🔗 {post_link}"
 
-    try:
-        await bot.send_message(admin_id, report)
-    except:
-        print("Ошибка отправки отчёта админу")
+    keyboard = InlineKeyboardMarkup()
+    if FAILED_CACHE.get(post_link):
+        keyboard.add(
+            InlineKeyboardButton(
+                "🔁 Повторить отправку",
+                callback_data=f"retry|{post_link}"
+            )
+        )
+
+    await bot.send_message(admin_id, report, reply_markup=keyboard)
+
+
+# =========================
+# КНОПКА ПОВТОРА
+# =========================
+@dp.callback_query_handler(lambda c: c.data.startswith("retry|"))
+async def retry_failed(callback: types.CallbackQuery):
+    post_link = callback.data.split("|", 1)[1]
+
+    retry_list = FAILED_CACHE.get(post_link, [])
+
+    if not retry_list:
+        await callback.answer("Нет пользователей для повтора")
+        return
+
+    success = 0
+
+    for username, user_id in retry_list:
+        try:
+            await bot.send_message(
+                user_id,
+                f"Вас упомянули в Джурыми!\n{post_link}",
+                disable_web_page_preview=True
+            )
+            success += 1
+        except:
+            continue
+
+        await asyncio.sleep(0.05)
+
+    await callback.message.answer(
+        f"🔁 Повторная отправка завершена\n\nУспешно: {success}"
+    )
+
+
 # =========================
 # CHANNEL POSTS
 # =========================
@@ -204,7 +249,7 @@ async def channel_post_handler(message: types.Message):
         return
 
     targets = extract_mentions_from_message(message)
-    # фильтр лишних упоминаний
+
     EXCLUDE = {
         "jureumishopmentionbot",
         "shopmentionbot",
@@ -219,7 +264,7 @@ async def channel_post_handler(message: types.Message):
     }
 
     targets = {t for t in targets if t not in EXCLUDE}
-    
+
     if not targets:
         return
 
