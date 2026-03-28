@@ -190,7 +190,7 @@ async def send_batch_notifications(targets, post_link):
 
     if failed:
         report += "⚠️ Не получили:\n"
-        report += "\n".join([f"{u} — {e}" for u, _, e in failed[:30])
+        report += "\n".join([f"{u} — {e}" for u, _, e in failed[:30]])
 
     report += f"\n\n🔗 {post_link}"
 
