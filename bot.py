@@ -177,7 +177,7 @@ async def send_batch_notifications(targets, post_link):
         await asyncio.sleep(0.05)
 
     # сохраняем для кнопки
-    FAILED_CACHE[post_link] = [(u, uid) for u, uid, _ in failed if uid]
+    FAILED_CACHE[post_link] = [(u, uid) for u, uid, _ in failed]
 
     # отчёт
     report = f"📊 Отчёт по посту\n\n"
@@ -222,6 +222,13 @@ async def retry_failed(callback: types.CallbackQuery):
     success = 0
 
     for username, user_id in retry_list:
+        
+        if not user_id:
+            user_id = get_user_id(username)
+            
+        if not user_id:
+            continue
+            
         try:
             await bot.send_message(
                 user_id,
