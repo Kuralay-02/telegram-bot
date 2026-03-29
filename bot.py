@@ -103,7 +103,7 @@ async def start_handler(message: types.Message):
 
 
 # =========================
-# MENTION EXTRACTOR
+# MENTION EXTRACTOR (ФИКС)
 # =========================
 def extract_mentions_from_message(message: types.Message) -> set[str]:
     found = set()
@@ -111,12 +111,14 @@ def extract_mentions_from_message(message: types.Message) -> set[str]:
     def handle_entities(text: str, entities):
         if not text or not entities:
             return
+
         for ent in entities:
             if ent.type == "mention":
-                raw = text[ent.offset: ent.offset + ent.length]
+                raw = ent.get_text(text)  # 🔥 ключевой фикс
                 uname = normalize_username(raw)
                 if uname:
                     found.add(uname)
+
             elif ent.type == "text_mention":
                 if ent.user and ent.user.id:
                     found.add(f"ID:{ent.user.id}")
@@ -176,10 +178,8 @@ async def send_batch_notifications(targets, post_link):
 
         await asyncio.sleep(0.05)
 
-    # сохраняем для кнопки
     FAILED_CACHE[post_link] = [(u, uid) for u, uid, _ in failed]
 
-    # отчёт
     report = f"📊 Отчёт по посту\n\n"
     report += f"✅ Успешно: {len(success)}\n"
     report += f"❌ Ошибки: {len(failed)}\n\n"
@@ -222,13 +222,13 @@ async def retry_failed(callback: types.CallbackQuery):
     success = 0
 
     for username, user_id in retry_list:
-        
+
         if not user_id:
             user_id = get_user_id(username)
-            
+
         if not user_id:
             continue
-            
+
         try:
             await bot.send_message(
                 user_id,
