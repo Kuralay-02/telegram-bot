@@ -1,3 +1,9 @@
+from bot_io import (
+    LazyResource,
+    configure_client,
+    run_sheets,
+    telegram_call,
+)
 import os
 import asyncio
 import json
@@ -30,10 +36,14 @@ dp = Dispatcher(bot)
 # GOOGLE SHEETS
 # =========================
 creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
-gc = gspread.service_account_from_dict(creds_dict)
+gc = configure_client(gspread.service_account_from_dict(creds_dict))
 
-spreadsheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1fqMGsQqXP9a7RNg-_7unYsqQeufg1If3oGPIFfqa-_o/edit?usp=sharing")
-sheet = spreadsheet.worksheet("Users")
+spreadsheet = LazyResource(
+    lambda: gc.open_by_url(
+        "https://docs.google.com/spreadsheets/d/1fqMGsQqXP9a7RNg-_7unYsqQeufg1If3oGPIFfqa-_o/edit?usp=sharing"
+    )
+)
+sheet = LazyResource(lambda: spreadsheet.worksheet("Users"))
 
 
 # =========================
@@ -58,14 +68,17 @@ def save_user(username: str, user_id: int):
     uname = normalize_username(username)
     if not uname:
         return
-
-    data = sheet.get_all_records()
-
-    for row in data:
-        if row["username"] == uname:
-            return
-
-    sheet.append_row([uname, user_id])
+    values = sheet.get_all_records()
+    own_row = None
+    for index, row in enumerate(values, start=2):
+        if str(row.get("user_id", "")) == str(user_id):
+            own_row = index
+        elif normalize_username(row.get("username", "")) == uname:
+            sheet.update_cell(index, 1, "")
+    if own_row is not None:
+        sheet.update(range_name=f"A{own_row}:B{own_row}", values=[[uname, user_id]])
+    else:
+        sheet.append_row([uname, user_id])
 
 
 def get_user_id(username: str):
@@ -94,7 +107,7 @@ async def start_handler(message: types.Message):
         )
         return
 
-    save_user(message.from_user.username, message.from_user.id)
+    await run_sheets(save_user, message.from_user.username, message.from_user.id)
 
     await message.answer(
         "Готово ✅\n"
@@ -135,9 +148,19 @@ def extract_mentions_from_message(message: types.Message) -> set[str]:
 # =========================
 # ОТПРАВКА + ОТЧЁТ
 # =========================
+def get_user_map():
+    return {
+        normalize_username(row.get("username", "")): int(row["user_id"])
+        for row in sheet.get_all_records()
+        if normalize_username(row.get("username", ""))
+        and str(row.get("user_id", "")).isdigit()
+    }
+
+
 async def send_batch_notifications(targets, post_link):
     admin_id = int(os.getenv("ADMIN_ID", "0"))
 
+    users = await run_sheets(get_user_map)
     success = []
     failed = []
 
@@ -149,7 +172,7 @@ async def send_batch_notifications(targets, post_link):
             except:
                 continue
         else:
-            user_id = get_user_id(t)
+            user_id = users.get(normalize_username(t))
             username = t
 
             if not user_id:
@@ -157,10 +180,16 @@ async def send_batch_notifications(targets, post_link):
                 continue
 
         try:
-            await bot.send_message(
+            if not t.startswith("ID:"):
+                current = await telegram_call(bot.get_chat, user_id)
+                if normalize_username(current.username) != normalize_username(t):
+                    failed.append((username, None, "юзернейм изменился, нужен /start"))
+                    continue
+            await telegram_call(
+                bot.send_message,
                 user_id,
                 f"Вас упомянули в Джурыми!\n{post_link}",
-                disable_web_page_preview=True
+                disable_web_page_preview=True,
             )
             success.append(username)
 
@@ -203,7 +232,7 @@ async def send_batch_notifications(targets, post_link):
             )
         )
 
-    await bot.send_message(admin_id, report, reply_markup=keyboard)
+    await telegram_call(bot.send_message, admin_id, report, reply_markup=keyboard)
 
 
 # =========================
@@ -220,27 +249,40 @@ async def retry_failed(callback: types.CallbackQuery):
         return
 
     success = 0
+    remaining = []
+    users = await run_sheets(get_user_map)
 
     for username, user_id in retry_list:
+        if not username.startswith("id:"):
+            user_id = users.get(normalize_username(username))
 
         if not user_id:
-            user_id = get_user_id(username)
+            user_id = await run_sheets(get_user_id, username)
 
         if not user_id:
+            remaining.append((username, None))
             continue
 
         try:
-            await bot.send_message(
+            if not username.startswith("id:"):
+                current = await telegram_call(bot.get_chat, user_id)
+                if normalize_username(current.username) != normalize_username(username):
+                    remaining.append((username, None))
+                    continue
+            await telegram_call(
+                bot.send_message,
                 user_id,
                 f"Вас упомянули в Джурыми!\n{post_link}",
-                disable_web_page_preview=True
+                disable_web_page_preview=True,
             )
             success += 1
-        except:
-            continue
+        except Exception:
+            remaining.append((username, user_id))
 
         await asyncio.sleep(0.05)
 
+    FAILED_CACHE[post_link] = remaining
+    await callback.answer()
     await callback.message.answer(
         f"🔁 Повторная отправка завершена\n\nУспешно: {success}"
     )
@@ -316,9 +358,26 @@ async def on_startup(dp):
 # =========================
 # START
 # =========================
-if __name__ == "__main__":
-    executor.start_polling(
-        dp,
-        skip_updates=True,
-        on_startup=on_startup
+@dp.errors_handler()
+async def handle_bot_error(update, exception):
+    import logging
+
+    logging.error(
+        "Ошибка обработки сообщения",
+        exc_info=(type(exception), exception, exception.__traceback__),
     )
+    message = update.message or (
+        update.callback_query.message if update.callback_query else None
+    )
+    if message and message.chat.type == "private":
+        try:
+            await message.answer(
+                "Не удалось выполнить действие из-за технической ошибки. Попробуйте ещё раз через минуту."
+            )
+        except Exception:
+            logging.exception("Не удалось отправить сообщение об ошибке")
+    return True
+
+
+if __name__ == "__main__":
+    executor.start_polling(dp, skip_updates=False, on_startup=on_startup)
