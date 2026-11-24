@@ -30,7 +30,8 @@ async def telegram_call(operation, *args, **kwargs):
 
 
 def configure_client(client):
-    client.set_timeout((5, 20))
+    transport = getattr(client, "http_client", client)
+    transport.set_timeout((5, 20))
     return client
 
 
